@@ -52,6 +52,7 @@ internal class WebSocketClient : IDisposable
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
+        log.Trace("Connecting...");
         this.manualClosed = false;
         await Task.Run(() =>
         {
@@ -62,6 +63,7 @@ internal class WebSocketClient : IDisposable
 
     public async Task SendAsync(byte[] payload, CancellationToken cancellationToken)
     {
+        log.Trace("Sending binary data.");
         await Task.Run(() =>
         {
             this.Socket.Send(payload);
@@ -70,6 +72,7 @@ internal class WebSocketClient : IDisposable
 
     public async Task SendAsync(string data, CancellationToken cancellationToken)
     {
+        log.Trace("Sending string data.");
         await Task.Run(() =>
         {
             this.Socket.Send(data);
@@ -78,6 +81,7 @@ internal class WebSocketClient : IDisposable
 
     public void Close()
     {
+        log.Trace("WebSocketClient manually closed.");
         this.manualClosed = true;
         this.Socket.Close();
     }
@@ -109,6 +113,7 @@ internal class WebSocketClient : IDisposable
 
     public void Dispose()
     {
+        log.Trace("WebSocketClient disposed.");
         this.Close();
     }
 }

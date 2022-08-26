@@ -9,4 +9,8 @@
     <RootNamespace>LiveChatLib2.Console</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Lib\Lib.csproj" />
+  </ItemGroup>
+
 </Project>

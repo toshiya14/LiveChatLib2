@@ -15,7 +15,7 @@ internal class WebSocketServer : IDisposable
         this.Proxy = new Server.WebSocketServer(port);
     }
 
-    public void AddWebSocketService<T>(string route, Action<T>? creator = null) where T : Server.WebSocketBehavior, new() => this.Proxy.WebSocketServices.AddService(route, creator);
+    public void AddWebSocketService<T>(string route, Func<T>? creator = null) where T : Server.WebSocketBehavior, new() => this.Proxy.AddWebSocketService<T>(route, creator);
 
     public Server.WebSocketSessionManager GetSession(string route) => this.Proxy.WebSocketServices[route].Sessions;
 

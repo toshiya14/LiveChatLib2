@@ -21,13 +21,13 @@ internal partial class BilibiliParser
             clientver= "1.10.6",
             key = token
         };
-        var package = new BilibiliRemotePackage(BilibiliMessageType.Auth, JsonConvert.SerializeObject(body, Newtonsoft.Json.Formatting.None,new JsonSerializerSettings{NullValueHandling = NullValueHandling.Ignore}));
+        var package = new BilibiliRemotePackage(BilibiliMessageType.Auth, JsonConvert.SerializeObject(body, Formatting.None,new JsonSerializerSettings{NullValueHandling = NullValueHandling.Ignore}));
         return package;
     }
 
     protected static BilibiliRemotePackage MakeHeartBeat()
     {
-        var package = new BilibiliRemotePackage(BilibiliMessageType.ClientHeart, "{}");
+        var package = new BilibiliRemotePackage(BilibiliMessageType.ClientHeart, "");
         return package;
     }
 
@@ -38,15 +38,21 @@ internal partial class BilibiliParser
         //socket.SendAsync(data, null);
 
         var package = MakeHeartBeat();
-        await socket.SendAsync(package.ToByteArray(), cancellationToken);
+        await socket.SendAsync(package.Body!, cancellationToken);
     }
 
-    protected static IEnumerable<BilibiliRemotePackage> ParsePackagesFromBinary(byte[] buffer)
+    protected IEnumerable<BilibiliRemotePackage> ParsePackagesFromBinary(byte[] buffer)
     {
-        var parts = SplitBuffer(buffer);
+        var parts = this.SplitBuffer(buffer);
 
         foreach (var p in parts)
         {
+            if (p == null)
+            {
+                // If one of the package is broken, stop parsing.
+                break;
+            }
+
             foreach (var package in BilibiliRemotePackage.LoadFromByteArray(p))
             {
                 yield return package;
@@ -62,8 +68,9 @@ internal partial class BilibiliParser
             RawData = package.Content
         };
         var content = package.Content.Trim();
+        JToken data;
         var json = JToken.Parse(content);
-        var data = json["data"];
+        data = json["data"]!;
 
         switch (package.MessageType)
         {
@@ -192,28 +199,29 @@ internal partial class BilibiliParser
         return message;
     }
 
-    private static IEnumerable<byte[]> SplitBuffer(byte[] buffer)
+    private IEnumerable<byte[]?> SplitBuffer(byte[] buffer)
     {
         using var ms = new MemoryStream(buffer);
         ms.Seek(0, SeekOrigin.Begin);
         using var reader = new BinaryReader(ms);
         while (ms.Position < ms.Length)
         {
-            byte[]? pack = null;
             // Check the remaining length is greater than 4
             if (ms.Length - ms.Position < 4)
             {
-                throw new Exception("Binary frame broken, the package size smaller than 4 bytes, could read meta data.");
+                log.Error("Binary frame broken, the package size smaller than 4 bytes, could read meta data.");
+                yield return null;
             }
 
             var length = reader.ReadBytes(4).ByteToInt32(true);
             if (length > buffer.Length)
             {
-                throw new Exception("Binary frame broken, package size:" + buffer.Length + ", size in header:" + length);
+                log.Error("Binary frame broken, package size:" + buffer.Length + ", size in header:" + length);
+                yield return null;
             }
 
             ms.Seek(-4, SeekOrigin.Current);
-            pack = reader.ReadBytes(length);
+            var pack = reader.ReadBytes(length);
             if (pack != null)
             {
                 yield return pack;

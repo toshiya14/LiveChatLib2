@@ -20,6 +20,7 @@ internal class SendWorker : IWorker<SendWorkItem>
     public async Task DoWork(SendWorkItem parameters, CancellationToken cancellationToken)
     {
         _ = this.SendMessage(parameters, cancellationToken);
+        await Task.Delay(50, cancellationToken);
     }
 
     public async Task SendMessage(SendWorkItem parameters, CancellationToken cancellationToken)

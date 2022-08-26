@@ -4,21 +4,30 @@ using LiveChatLib2.Models.QueueMessages;
 using LiveChatLib2.Models.QueueMessages.WorkItems;
 using LiveChatLib2.Models.RemotePackages;
 using LiveChatLib2.Queue;
+using NLog;
 
 namespace LiveChatLib2.Storage;
 
 internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
 {
     private BilibiliUserInfoStorage UserStorage { get; }
-    private IMessageQueue<WorkItemBase> Queue { get; }
+    private IMessageQueue<CrawlerWorkItem> Queue { get; }
+
+    private LiteDatabase ChatDatabase { get; }
+    private LiteDatabase SampleDatabase { get; }
+
+    private readonly ILogger log = LogManager.GetCurrentClassLogger();
 
     public BilibiliChatStorage(
         BilibiliUserInfoStorage userStorage,
-        IMessageQueue<WorkItemBase> queue
+        IMessageQueue<CrawlerWorkItem> queue
     )
     {
+        log.Trace("BilibiliChatStorage Initialized.");
         this.UserStorage = userStorage;
         this.Queue = queue;
+        this.ChatDatabase = new LiteDatabase(SampleDatabasePath);
+        this.SampleDatabase = new LiteDatabase(SampleDatabasePath);
     }
 
     public async Task RecordChatMessage(BilibiliMessageRecord message, CancellationToken cancellationToken)
@@ -26,7 +35,7 @@ internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
         this.InitializeDatabaseFolder();
         await Task.Run(() =>
         {
-            using var db = new LiteDatabase(ChatLogDatabasePath);
+            var db = this.ChatDatabase;
             var chats = db.GetCollection<BilibiliMessageRecord>();
             chats.Insert(message);
             chats.EnsureIndex(x => x.SenderName);
@@ -40,7 +49,7 @@ internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
         this.InitializeDatabaseFolder();
         await Task.Run(() =>
         {
-            using var db = new LiteDatabase(SampleDatabasePath);
+            var db = this.SampleDatabase;
             var cols = db.GetCollection<BilibiliRemotePackage>();
             cols.Insert(package);
         }, cancellationToken);
@@ -52,7 +61,7 @@ internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
 
         return await Task.Run(() =>
         {
-            using var db = new LiteDatabase(base.ChatLogDatabasePath);
+            var db = this.ChatDatabase;
             var chats = db.GetCollection<BilibiliMessageRecord>().Include(x=>x.Type == "comment" || x.Type == "gift").Find(Query.All("ReceiveTime", Query.Descending)).Take(count);
 
             foreach (var i in chats)
@@ -78,5 +87,11 @@ internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
 
             return chats.Reverse().ToList();
         }, cancellationToken);
+    }
+
+    public void Dispose()
+    {
+        this.ChatDatabase.Dispose();
+        this.SampleDatabase.Dispose();
     }
 }

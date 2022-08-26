@@ -18,6 +18,8 @@ internal class DistributeService : IDisposable
 {
     private WebSocketServer Server { get; set; }
 
+    private ILogger log = LogManager.GetCurrentClassLogger();
+
     public DistributeService(
         WebSocketServer server,
         IMessageQueue<ClientMessage> queue,
@@ -27,14 +29,15 @@ internal class DistributeService : IDisposable
         this.Server = server;
         this.Server.AddWebSocketService<DistributeServiceApp>(
             DistributeServiceApp.ROUTE,
-            (service) =>
+            () =>
             {
-                service.Initialize(
-                    queue,
-                    clientTable
-                );
+                var app = new DistributeServiceApp();
+                app.Initialize(queue, clientTable);
+                return app;
             }
         );
+
+        log.Info("DistributeService has been initialized.");
     }
 
     public async Task Serve(CancellationToken cancellationToken)

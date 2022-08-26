@@ -18,5 +18,7 @@ internal abstract class StorageBase
     public void InitializeDatabaseFolder()
     {
         Directory.CreateDirectory(DatabaseHomeFolder);
+        Directory.CreateDirectory(Path.Combine(DatabaseHomeFolder, "chatlog"));
+        Directory.CreateDirectory(Path.Combine(DatabaseHomeFolder, "samples"));
     }
 }

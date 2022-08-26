@@ -6,6 +6,7 @@ using WebSocketSharp;
 using LiveChatLib2.Services;
 using LiveChatLib2.Models;
 using LiveChatLib2.Models.QueueMessages.WorkItems;
+using Newtonsoft.Json;
 
 namespace LiveChatLib2.Parsers;
 
@@ -16,7 +17,7 @@ internal partial class BilibiliParser
     private const string WEBSOCKET_URL = @"wss://broadcastlv.chat.bilibili.com/sub";
     private const string SOURCE = "bilibili";
 
-    private WebSocketClient? Proxy { get; set; }
+    private WebSocketClient Proxy { get; set; }
 
     private string? realRoomId;
     private string? roomToken;
@@ -28,15 +29,15 @@ internal partial class BilibiliParser
         this.proxyCancellationToken = ct;
 
         await this.Prepare();
-        this.Proxy = new WebSocketClient(WEBSOCKET_URL);
         this.State = ParserListeningStatus.Connecting;
-        await this.Proxy.ConnectAsync(ct);
 
         // Event registration.
         this.Proxy.OnMessage += this.OnMessage;
         this.Proxy.OnError += this.OnError;
         this.Proxy.OnClose += this.OnClose;
         this.Proxy.OnOpen += this.OnOpen;
+
+        await this.Proxy.ConnectAsync(ct);
 
         // Start Checking.
         _ = this.CheckProxyState();
@@ -53,7 +54,7 @@ internal partial class BilibiliParser
 
         while (!ct.IsCancellationRequested)
         {
-            if (this.Proxy != null && this.Proxy.ReadyState is WebSocketState.Open)
+            if (this.State == ParserListeningStatus.Connected)
             {
                 var now = DateTime.UtcNow;
                 var heartBeatDuration = (now - lastSendHeartBeatTime).TotalMilliseconds;
@@ -64,22 +65,26 @@ internal partial class BilibiliParser
                     await SendHeartBeat(this.Proxy, ct);
                     lastSendHeartBeatTime = now;
                     waitBack = true;
+                    log.Trace("Heartbeat sent.");
+                    break;
                 }
 
                 // checking.
                 if (waitBack && heartBeatDuration > this.Config.LostTimeoutThreshold)
                 {
                     this.State = ParserListeningStatus.BadCommunication;
+                    log.Trace("Bad communication detected.");
                     _ = this.Proxy.ReconnectAsync(ct);
                 }
-
-                await Task.Delay(3000, ct);
             }
+
+            await Task.Delay(1000, ct);
         }
     }
 
-    private async Task Login()
+    private void Login()
     {
+        log.Trace($"Try to login to the room.");
         if (proxyCancellationToken == null)
         {
             throw new InvalidOperationException("Proxy are not initialized.");
@@ -93,13 +98,18 @@ internal partial class BilibiliParser
         }
 
         var package = MakeAuthPackage("0", realRoomId, roomToken);
+        log.Debug($"Auth Package: {JsonConvert.SerializeObject(package)}");
         log.Info($"Connecting WebSocket with ROOMID: {realRoomId} ...");
         var bytes = package.ToByteArray();
-        await this.Proxy.SendAsync(bytes, ct);
+        //Task.Delay(1000).Wait();
+        this.Proxy.SendAsync(bytes, ct).Wait();
+        log.Trace($"Login successfully.");
+        this.State = ParserListeningStatus.Connected;
     }
 
     private async Task Prepare()
     {
+        log.Trace("Preparing BilibiliParser.");
         if (proxyCancellationToken == null)
         {
             throw new InvalidOperationException("Proxy are not initialized.");
@@ -127,16 +137,14 @@ internal partial class BilibiliParser
 
         this.realRoomId = realRoomId;
         this.roomToken = roomToken;
+
+        log.Debug($"Got room information from server: RealRoomId={realRoomId}, RoomToken={roomToken}");
     }
 
     private void OnOpen(object? sender, EventArgs e)
     {
-        if (this.Proxy != null && this.Proxy.ReadyState == WebSocketState.Open)
-        {
-            this.State = ParserListeningStatus.Connected;
-        }
-
-        _ = this.Login();
+        log.Trace("WebSocket successfully open.");
+        this.Login();
     }
 
     private void OnClose(object? sender, CloseEventArgs e)
@@ -146,31 +154,33 @@ internal partial class BilibiliParser
 
     private void OnError(object? sender, WebSocketSharp.ErrorEventArgs e)
     {
-        log.Error($"BilibiliParser.WebSocketProxy error: #{e.Message}");
+        log.Error($"BilibiliParser.WebSocketProxy error:{e.Message}");
     }
 
     private void OnMessage(object? sender, MessageEventArgs args)
     {
+        log.Trace("OnMessage verbose.");
         waitBack = false;
         lastReceiveTime = DateTime.UtcNow;
         try
         {
-            foreach (var package in ParsePackagesFromBinary(args.RawData))
+            foreach (var package in this.ParsePackagesFromBinary(args.RawData))
             {
                 try
                 {
                     var msg = this.ConvertPackageToMessage(package);
+                    log.Debug($"Receive message from bilibili: {JsonConvert.SerializeObject(msg)}");
+
                     if (msg == null || msg.Type is "unknown")
                     {
                         log.Warn($"Recording an unknown package: {package.Id}");
 
-                        this.Queue.Enqueue(
+                        this.RecordQueue.Enqueue(
                             new RecordWorkItem(
                                 SOURCE,
                                 RecordType.Package,
                                 package
                             )
-
                         );
 
                         continue;
@@ -183,7 +193,7 @@ internal partial class BilibiliParser
                             var user = this.UserStorage.PickUserInformation(msg.SenderId);
                             if (user == null)
                             {
-                                this.Queue.Enqueue(
+                                this.CrawlerQueue.Enqueue(
                                     new BilibiliUserCrawlerWorkItem(
                                         msg.SenderId,
                                         new ClientInfo(
@@ -202,26 +212,12 @@ internal partial class BilibiliParser
                             }
                         }
 
-                        this.Queue.Enqueue(
+                        this.RecordQueue.Enqueue(
                             new RecordWorkItem(
                                 SOURCE,
                                 RecordType.Chat,
                                 msg
                             )
-                        );
-
-                        this.Queue.Enqueue(
-                            new SendWorkItem(
-                                SOURCE,
-                                new ClientInfo(
-                                    ClientAction.Broadcast,
-                                    DistributeServiceApp.ROUTE
-                                ),
-                                ObjectSerializer.ToJsonBinary(
-                                    new ClientMessageResponse("user-info", msg)
-                                )
-                            )
-                            
                         );
                     }
                 }

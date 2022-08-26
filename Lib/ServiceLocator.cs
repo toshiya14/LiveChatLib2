@@ -13,12 +13,13 @@ using System.Collections.Concurrent;
 using LiveChatLib2.Utils;
 using LiveChatLib2.Models.QueueMessages;
 using LiveChatLib2.Models.QueueMessages.WorkItems;
+using LightInject;
 
 namespace LiveChatLib2;
 
 internal class ServicesLocator
 {
-    private Container Container { get; }
+    private ServiceContainer Container { get; }
     private static readonly string configBasePath = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory,
         "configs"
@@ -34,7 +35,7 @@ internal class ServicesLocator
 
     public ServicesLocator()
     {
-        this.Container = new Container();
+        this.Container = new ServiceContainer();
         this.InitConfig();
         this.InitBasements();
         this.InitClientTable();
@@ -44,100 +45,110 @@ internal class ServicesLocator
         this.InitServices();
     }
 
+    private void RegisterService<TInterface, TInstance>() where TInstance : TInterface
+    {
+        this.Container.Register<TInterface, TInstance>();
+    }
+
+    private void RegisterService<TInterface>(Func<IServiceFactory, TInterface> creator)
+    {
+        this.Container.Register(creator, new PerContainerLifetime());
+    }
+
     private void InitConfig()
     {
-        var liveChatConfig = File.ReadAllText(appConfigPath);
-        var bilibiliConfig = File.ReadAllText(bilibiliConfigPath);
-        this.Container
-            .Register(() => LoadConfigFromYaml<LiveChatLibConfig>(liveChatConfig))
-            .AsSingleton();
-        this.Container
-            .Register(() => LoadConfigFromYaml<BilibiliParserConfig>(bilibiliConfig))
-            .AsSingleton();
+        this.RegisterService((factory) => LoadConfigFromYaml<LiveChatLibConfig>(appConfigPath));
+        this.RegisterService((factory) => LoadConfigFromYaml<BilibiliParserConfig>(bilibiliConfigPath));
     }
 
     private void InitBasements()
     {
-        this.Container
-            .Register<IMessageQueue<SendWorker>>(typeof(EasyMessageQueue<SendWorker>))
-            .AsSingleton();
-        this.Container
-            .Register<IMessageQueue<CrawlerWorker>>(typeof(EasyMessageQueue<CrawlerWorker>))
-            .AsSingleton();
-        this.Container
-            .Register<IMessageQueue<RecordWorker>>(typeof(EasyMessageQueue<RecordWorker>))
-            .AsSingleton();
-        this.Container
-            .Register<IMessageQueue<ClientMessage>>(typeof(EasyMessageQueue<ClientMessage>))
-            .AsSingleton();
-        this.Container
-            .Register(this.BuildWebSocketServer)
-            .AsSingleton();
+        this.RegisterService<IMessageQueue<SendWorkItem>, EasyMessageQueue<SendWorkItem>>();
+        this.RegisterService<IMessageQueue<CrawlerWorkItem>, EasyMessageQueue<CrawlerWorkItem>>();
+        this.RegisterService<IMessageQueue<RecordWorkItem>, EasyMessageQueue<RecordWorkItem>>();
+        this.RegisterService<IMessageQueue<ClientMessage>, EasyMessageQueue<ClientMessage>>();
+        this.RegisterService(this.BuildWebSocketServer);
     }
 
     private void InitStorage()
     {
-        this.Container
-            .Register<IBilibiliChatStorage>(typeof(BilibiliChatStorage))
-            .AsSingleton();
-        this.Container
-            .Register<IBilibiliUserInfoStorage>(typeof(BilibiliUserInfoStorage))
-            .AsSingleton();
+        this.RegisterService<IBilibiliUserInfoStorage, BilibiliUserInfoStorage>();
+        this.RegisterService<IBilibiliChatStorage, BilibiliChatStorage>();
     }
 
     private void InitParsers()
     {
-        this.Container
-            .Register<IBilibiliParser>(typeof(BilibiliParser))
-            .AsSingleton();
+        this.RegisterService<IBilibiliParser, BilibiliParser>();
     }
 
     private void InitWorkers()
     {
-        this.Container
-            .Register<IWorker<ClientMessage>>(typeof(ClientMessageProcessWorker))
-            .AsSingleton();
-        this.Container
-            .Register<IWorker<RecordWorkItem>>(typeof(RecordWorker))
-            .AsSingleton();
-        this.Container
-            .Register<IWorker<CrawlerWorkItem>>(typeof(CrawlerWorker))
-            .AsSingleton();
-        this.Container
-            .Register<IWorker<SendWorkItem>>(typeof(SendWorker))
-            .AsSingleton();
+        this.RegisterService<IWorker<ClientMessage>, ClientMessageProcessWorker>();
+        this.RegisterService<IWorker<RecordWorkItem>, RecordWorker>();
+        this.RegisterService<IWorker<CrawlerWorkItem>, CrawlerWorker>();
+        this.RegisterService<IWorker<SendWorkItem>, SendWorker>();
     }
 
     private void InitServices()
     {
-        this.Container
-            .Register<DistributeService>(typeof(DistributeService))
-            .AsSingleton();
+        this.RegisterService<DistributeService, DistributeService>();
     }
 
-    private static T LoadConfigFromYaml<T>(string text)
+    private static T LoadConfigFromYaml<T>(string path) where T : class, new()
     {
-        var deserializer = new DeserializerBuilder()
-            .WithNamingConvention(CamelCaseNamingConvention.Instance)
-            .Build();
-        var config = deserializer.Deserialize<T>(text);
-        return config;
+        var fi = new FileInfo(path);
+        if (!fi.Exists)
+        {
+            var config = new T();
+            return config;
+        }
+        else
+        {
+            var text = File.ReadAllText(path);
+            var deserializer = new DeserializerBuilder().Build();
+            var config = deserializer.Deserialize<T>(text);
+            return config;
+        }
     }
 
-    private WebSocketServer BuildWebSocketServer()
+    private WebSocketServer BuildWebSocketServer(IServiceFactory factory)
     {
-        var config = this.Container.Resolve<LiveChatLibConfig>();
+        var config = factory.GetInstance<LiveChatLibConfig>();
+        if (config is null)
+        {
+            throw new InvalidOperationException("LiveChatLibConfig should be initialized before WebSocketServer.");
+        }
+
         var server = new WebSocketServer(config.DistributorPort ?? 6099);
         return server;
     }
 
     private void InitClientTable()
     {
-        this.Container
-            .Register(() => new ClientTable())
-            .AsSingleton();
+        this.RegisterService((factory) => new ClientTable());
     }
 
-    public T Resolve<T>() => this.Container.Resolve<T>();
+    public T Resolve<T>() where T : class
+    {
+        var instance = this.Container.TryGetInstance<T>();
+        if (instance == null)
+        {
+            throw new Exception($"Unable to resolve the instance of {typeof(T).Name}.");
+        }
+
+        return instance;
+    }
+
+    public T ResolveRequired<T>() where T : class
+    {
+        var instance = this.Resolve<T>();
+
+        if (instance is null)
+        {
+            throw new NullReferenceException($"Required instance with type:{typeof(T).Name} is missing.");
+        }
+
+        return instance;
+    }
 }
 

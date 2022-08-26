@@ -7,7 +7,7 @@ namespace LiveChatLib2.Models.RemotePackages;
 internal class BilibiliRemotePackage
 {
     [BsonField("_id")]
-    public string Id { get; set; }
+    public string Id { get; private set; }
     public int Length => this.HeadLength + (this.Body?.Length ?? 0);
     public short HeadLength { get; private set; }
     public short ProtoVer { get; private set; }
@@ -29,6 +29,19 @@ internal class BilibiliRemotePackage
         this.BodyEncoding = Encoding.UTF8;
         this.Id = new NUlid.Ulid().ToString();
     }
+
+    public BilibiliRemotePackage(BilibiliMessageType msgType, string content, Encoding? encoding = null, short protover = 0x1, short headlen = 0x10, int sequence = 0x1)
+        : this()
+    {
+        this.Id = new NUlid.Ulid().ToString();
+        this.HeadLength = headlen;
+        this.ProtoVer = protover;
+        this.MessageType = msgType;
+        this.Sequence = sequence;
+        this.BodyEncoding = encoding ?? Encoding.UTF8;
+        this.Content = content;
+    }
+
     public static IEnumerable<BilibiliRemotePackage> ExtractPackage(BilibiliMessageType msgType, byte[] body, Encoding? encoding = null, short protover = 0x1, short headlen = 0x10, int sequence = 0x1)
     {
         var package = new BilibiliRemotePackage
@@ -86,17 +99,6 @@ internal class BilibiliRemotePackage
         }
 
         yield return package;
-    }
-
-    public BilibiliRemotePackage(BilibiliMessageType msgType, string content, Encoding? encoding = null, short protover = 0x1, short headlen = 0x10, int sequence = 0x1)
-        : this()
-    {
-        this.HeadLength = headlen;
-        this.ProtoVer = protover;
-        this.MessageType = msgType;
-        this.Sequence = sequence;
-        this.BodyEncoding = encoding ?? Encoding.UTF8;
-        this.Content = content;
     }
 
     public byte[] ToByteArray()
