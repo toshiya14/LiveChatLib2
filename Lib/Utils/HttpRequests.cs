@@ -8,7 +8,6 @@ internal static class HttpRequests
     {
         using var client = new HttpClient();
         client.DefaultRequestHeaders.Add("user-agent", userAgent);
-        //client.DefaultRequestHeaders.Add("content-encoding", "utf-8");
         if (headers != null && headers.Count > 0)
         {
             foreach (var header in headers)
@@ -26,7 +25,6 @@ internal static class HttpRequests
     {
         using var client = new HttpClient();
         client.DefaultRequestHeaders.Add("user-agent", userAgent);
-        client.DefaultRequestHeaders.Add("content-encoding", "utf-8");
         if (headers != null && headers.Count > 0)
         {
             foreach (var header in headers)

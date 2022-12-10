@@ -27,13 +27,13 @@ internal class BilibiliRemotePackage
     public BilibiliRemotePackage()
     {
         this.BodyEncoding = Encoding.UTF8;
-        this.Id = new NUlid.Ulid().ToString();
+        this.Id = NUlid.Ulid.NewUlid().ToString();
     }
 
     public BilibiliRemotePackage(BilibiliMessageType msgType, string content, Encoding? encoding = null, short protover = 0x1, short headlen = 0x10, int sequence = 0x1)
         : this()
     {
-        this.Id = new NUlid.Ulid().ToString();
+        this.Id = NUlid.Ulid.NewUlid().ToString();
         this.HeadLength = headlen;
         this.ProtoVer = protover;
         this.MessageType = msgType;
@@ -44,7 +44,7 @@ internal class BilibiliRemotePackage
 
     public static IEnumerable<BilibiliRemotePackage> ExtractPackage(BilibiliMessageType msgType, byte[] body, Encoding? encoding = null, short protover = 0x1, short headlen = 0x10, int sequence = 0x1)
     {
-        var package = new BilibiliRemotePackage
+        var package = new BilibiliRemotePackage()
         {
             HeadLength = headlen,
             ProtoVer = protover,
@@ -136,10 +136,7 @@ internal class BilibiliRemotePackage
         ms.Seek(headlength, SeekOrigin.Begin);
         var body = reader.ReadBytes(length - headlength);
 
-        foreach (var item in ExtractPackage((BilibiliMessageType)command, body, Encoding.UTF8, protover, headlength, sequence)) 
-        {
-            yield return item;
-        }
+        return ExtractPackage((BilibiliMessageType)command, body, Encoding.UTF8, protover, headlength, sequence);
     }
 }
 

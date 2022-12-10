@@ -16,24 +16,36 @@ namespace LiveChatLib2.Workers;
 internal class CrawlerWorker : IWorker<CrawlerWorkItem>
 {
     public WorkItemAction[] ConsumerActions { get; }
+    private IBilibiliUserInfoStorage Storage { get; }
+    private IMessageQueue<SendWorkItem> SendQueue { get; }
+    private IMessageQueue<RecordWorkItem> RecordQueue { get; }
+
     private readonly ILogger log = LogManager.GetCurrentClassLogger();
 
     public CrawlerWorker(
-        IMessageQueue<WorkItemBase> queue
+        IBilibiliUserInfoStorage storage,
+        IMessageQueue<SendWorkItem> sendQueue,
+        IMessageQueue<RecordWorkItem> recordQueue
     )
     {
-        this.Queue = queue;
         this.ConsumerActions = new[] { WorkItemAction.Crawl };
+        this.Storage = storage;
+        this.SendQueue = sendQueue;
+        this.RecordQueue = recordQueue;
     }
-
-    private IMessageQueue<WorkItemBase> Queue { get; }
 
     public async Task DoWork(CrawlerWorkItem parameters, CancellationToken cancellationToken)
     {
         switch (parameters.Source)
         {
             case "bilibili":
-                await this.ProcessBilibiliMessage(parameters, cancellationToken);
+                // Check if the record already in the database.
+                if (await this.ProcessBilibiliMessage(parameters, cancellationToken))
+                {
+                    // Prevent server block.
+                    await Task.Delay(500, cancellationToken);
+                }
+
                 break;
 
             default:
@@ -41,9 +53,10 @@ internal class CrawlerWorker : IWorker<CrawlerWorkItem>
         }
     }
 
-    private async Task ProcessBilibiliMessage(CrawlerWorkItem parameters, CancellationToken cancellationToken)
+    private async Task<bool> ProcessBilibiliMessage(CrawlerWorkItem parameters, CancellationToken cancellationToken)
     {
-        if (parameters is not BilibiliCrawlerWorkItem bcw) 
+        var result = true;
+        if (parameters is not BilibiliCrawlerWorkItem bcw)
         {
             throw new InvalidOperationException("The message ProcessBilibiliMessage are handling is not BilibiliCrawlerWorkItem.");
         }
@@ -56,27 +69,46 @@ internal class CrawlerWorker : IWorker<CrawlerWorkItem>
                     throw new InvalidOperationException("The TaskName is User but the message ProcessBilibiliMessage are handling is not BilibiliUserCrawlerWorkItem.");
                 }
 
-                var user = await this.CrawlBilibiliUserInfo(bucw.UserId, cancellationToken);
-                if (user is null) 
+                if (string.IsNullOrEmpty(bucw.UserId))
                 {
-                    log.Warn($"Faiiled to fetch user info with ID: {bucw.UserId}");
-                    return;
+                    log.Error($"Failed to fetch user info, Id is empty.\nOriginal: {JsonConvert.SerializeObject(bucw)}");
+                    return false;
                 }
 
-                log.Info($"Successfully fetched user info with ID: {bucw.UserId}");
+                var indb = this.Storage.PickUserInformation(bucw.UserId);
+                BilibiliUserInfo toSend;
 
-                this.Queue.Enqueue(
-                    new RecordWorkItem(bucw.Source, RecordType.User, user)
-                );
+                if (indb is not null)
+                {
+                    log.Warn($"No need to crawl this user, it is already in database, ignored.");
+                    result = false;
+                    toSend = indb;
+                }
+                else
+                {
+                    var user = await this.CrawlBilibiliUserInfo(bucw.UserId, cancellationToken);
+                    if (user is null)
+                    {
+                        log.Error($"Faiiled to fetch user info with ID: {bucw.UserId}");
+                        return false;
+                    }
+
+                    log.Info($"Successfully fetched user info with ID: {bucw.UserId}");
+
+                    this.RecordQueue.Enqueue(
+                        new RecordWorkItem(bucw.Source, RecordType.User, user)
+                    );
+                    toSend = user;
+                }
 
                 if (parameters.PostSendingTarget != null)
                 {
-                    this.Queue.Enqueue(
+                    this.SendQueue.Enqueue(
                         new SendWorkItem(
                             bucw.Source,
                             parameters.PostSendingTarget,
                             ObjectSerializer.ToJsonBinary(
-                                new ClientMessageResponse("user-info", user!)
+                                new ClientMessageResponse("user-info", toSend)
                             )
                         )
                     );
@@ -87,6 +119,8 @@ internal class CrawlerWorker : IWorker<CrawlerWorkItem>
             default:
                 throw new InvalidDataException($"Unknown TaskName: {bcw.TaskName}");
         }
+
+        return result;
     }
 
     private async Task<BilibiliUserInfo?> CrawlBilibiliUserInfo(string uid, CancellationToken cancellationToken)
@@ -108,15 +142,23 @@ internal class CrawlerWorker : IWorker<CrawlerWorkItem>
         var json = JToken.Parse(result);
         var face64 = "";
 
-        // Download avatar.
-        if (json["data"]?["face"] != null)
+        if (json["data"]?.Type == JTokenType.Object)
         {
-            var faceurl = json["data"]?["face"]?.ToString();
-            if (faceurl != null)
+            // Download avatar.
+            if (json["data"]!["face"] is not null)
             {
-                var facedata = await HttpRequests.DownloadBytes(faceurl, null, cancellationToken);
-                face64 = ImageHelper.ConvertToJpegBase64(facedata);
+                var faceurl = json["data"]?["face"]?.ToString();
+                if (faceurl != null)
+                {
+                    var facedata = await HttpRequests.DownloadBytes(faceurl, null, cancellationToken);
+                    face64 = ImageHelper.ConvertToJpegBase64(facedata);
+                }
             }
+        }
+        else
+        {
+            log.Error($"Failed to recognize json data.\nOriginal: {JsonConvert.SerializeObject(json)}");
+            return null;
         }
 
         // Save the data.
@@ -136,7 +178,7 @@ internal class CrawlerWorker : IWorker<CrawlerWorkItem>
             // TODO: log warning.
         }
 
-        this.Queue.Enqueue(
+        this.RecordQueue.Enqueue(
             new RecordWorkItem(
                 "bilibili",
                 RecordType.User,

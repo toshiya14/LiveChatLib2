@@ -94,9 +94,9 @@ internal class DistributeServiceApp : WebSocketBehavior
         }
 
         // Reply ping inmediately.
-        if (e.IsPing || (e.IsText && e.Data.Equals("ping", StringComparison.OrdinalIgnoreCase)))
+        if (e.IsText && e.Data.Equals("ping", StringComparison.OrdinalIgnoreCase))
         {
-            this.Sessions.SendTo(this.ID, "pong");
+            this.Sessions.SendTo("pong", this.ID);
             base.OnMessage(e);
             return;
         }

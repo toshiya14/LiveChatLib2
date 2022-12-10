@@ -11,16 +11,16 @@ namespace LiveChatLib2.Workers;
 internal class RecordWorker : IWorker<RecordWorkItem>
 {
     public RecordWorker(
-        BilibiliUserInfoStorage bilibiliUserInfoStorage,
-        BilibiliChatStorage bilibiliChatStorage
+        IBilibiliUserInfoStorage bilibiliUserInfoStorage,
+        IBilibiliChatStorage bilibiliChatStorage
     )
     {
         this.BilibiliUserInfoStorage = bilibiliUserInfoStorage;
         this.BilibiliChatStorage = bilibiliChatStorage;
     }
 
-    private BilibiliUserInfoStorage BilibiliUserInfoStorage { get; }
-    private BilibiliChatStorage BilibiliChatStorage { get; }
+    private IBilibiliUserInfoStorage BilibiliUserInfoStorage { get; }
+    private IBilibiliChatStorage BilibiliChatStorage { get; }
 
     private readonly ILogger log = LogManager.GetCurrentClassLogger();
 

@@ -14,12 +14,15 @@ using LiveChatLib2.Utils;
 using LiveChatLib2.Models.QueueMessages;
 using LiveChatLib2.Models.QueueMessages.WorkItems;
 using LightInject;
+using NLog;
 
 namespace LiveChatLib2;
 
 internal class ServicesLocator
 {
     private ServiceContainer Container { get; }
+    private static ILogger log = LogManager.GetCurrentClassLogger();
+
     private static readonly string configBasePath = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory,
         "configs"
@@ -47,12 +50,17 @@ internal class ServicesLocator
 
     private void RegisterService<TInterface, TInstance>() where TInstance : TInterface
     {
-        this.Container.Register<TInterface, TInstance>();
+        this.Container.Register<TInterface, TInstance>(new PerContainerLifetime());
     }
 
     private void RegisterService<TInterface>(Func<IServiceFactory, TInterface> creator)
     {
         this.Container.Register(creator, new PerContainerLifetime());
+    }
+
+    private void RegisterService(Type Interface, Func<IServiceFactory, object> creator)
+    {
+        this.Container.Register(Interface, creator, new PerContainerLifetime());
     }
 
     private void InitConfig()
@@ -128,27 +136,22 @@ internal class ServicesLocator
         this.RegisterService((factory) => new ClientTable());
     }
 
-    public T Resolve<T>() where T : class
+    public T? Resolve<T>() where T : class
     {
-        var instance = this.Container.TryGetInstance<T>();
-        if (instance == null)
-        {
-            throw new Exception($"Unable to resolve the instance of {typeof(T).Name}.");
-        }
-
-        return instance;
+        return (T)this.Resolve(typeof(T))!;
     }
 
-    public T ResolveRequired<T>() where T : class
-    {
-        var instance = this.Resolve<T>();
-
-        if (instance is null)
+    public object? Resolve(Type Interface) {
+        try
         {
-            throw new NullReferenceException($"Required instance with type:{typeof(T).Name} is missing.");
+            var instance = this.Container.TryGetInstance(Interface);
+            return instance;
         }
-
-        return instance;
+        catch (Exception ex)
+        {
+            log.Error($"Failed to resolve {Interface.Name} service, would return null: {ex.GetType().Name}|{ex.Message}");
+            return null;
+        }
     }
 }
 

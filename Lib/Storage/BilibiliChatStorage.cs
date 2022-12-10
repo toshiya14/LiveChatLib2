@@ -10,61 +10,63 @@ namespace LiveChatLib2.Storage;
 
 internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
 {
-    private BilibiliUserInfoStorage UserStorage { get; }
+    private IBilibiliUserInfoStorage UserStorage { get; }
     private IMessageQueue<CrawlerWorkItem> Queue { get; }
 
-    private LiteDatabase ChatDatabase { get; }
-    private LiteDatabase SampleDatabase { get; }
-
-    private readonly ILogger log = LogManager.GetCurrentClassLogger();
+    private static readonly ILogger log = LogManager.GetCurrentClassLogger();
 
     public BilibiliChatStorage(
-        BilibiliUserInfoStorage userStorage,
+        IBilibiliUserInfoStorage userStorage,
         IMessageQueue<CrawlerWorkItem> queue
     )
     {
         log.Trace("BilibiliChatStorage Initialized.");
         this.UserStorage = userStorage;
         this.Queue = queue;
-        this.ChatDatabase = new LiteDatabase(SampleDatabasePath);
-        this.SampleDatabase = new LiteDatabase(SampleDatabasePath);
+        this.InitializeDatabaseFolder();
     }
 
     public async Task RecordChatMessage(BilibiliMessageRecord message, CancellationToken cancellationToken)
     {
-        this.InitializeDatabaseFolder();
         await Task.Run(() =>
         {
-            var db = this.ChatDatabase;
-            var chats = db.GetCollection<BilibiliMessageRecord>();
-            chats.Insert(message);
-            chats.EnsureIndex(x => x.SenderName);
-            chats.EnsureIndex(x => x.ReceiveTime);
-            chats.EnsureIndex(x => x.SenderId);
+            lock (this.ChatLogDatabasePath)
+            {
+                using var db = new LiteDatabase(this.ChatLogDatabasePath);
+                var chats = db.GetCollection<BilibiliMessageRecord>();
+                chats.Insert(message);
+                chats.EnsureIndex(x => x.SenderName);
+                chats.EnsureIndex(x => x.ReceiveTime);
+                chats.EnsureIndex(x => x.SenderId);
+            }
         }, cancellationToken);
     }
 
     public async Task RecordRemotePackage(BilibiliRemotePackage package, CancellationToken cancellationToken)
     {
-        this.InitializeDatabaseFolder();
         await Task.Run(() =>
         {
-            var db = this.SampleDatabase;
-            var cols = db.GetCollection<BilibiliRemotePackage>();
-            cols.Insert(package);
+            lock (this.SampleDatabasePath)
+            {
+                using var db = new LiteDatabase(this.SampleDatabasePath);
+                var cols = db.GetCollection<BilibiliRemotePackage>();
+                cols.Insert(package);
+            }
         }, cancellationToken);
     }
 
     public async Task<IList<BilibiliMessageRecord>> PickLastestComments(int count, CancellationToken cancellationToken)
     {
-        base.InitializeDatabaseFolder();
-
         return await Task.Run(() =>
         {
-            var db = this.ChatDatabase;
-            var chats = db.GetCollection<BilibiliMessageRecord>().Include(x=>x.Type == "comment" || x.Type == "gift").Find(Query.All("ReceiveTime", Query.Descending)).Take(count);
+            IEnumerable<BilibiliMessageRecord> chats;
+            lock (this.ChatLogDatabasePath)
+            {
+                using var db = new LiteDatabase(this.ChatLogDatabasePath);
+                chats = db.GetCollection<BilibiliMessageRecord>().Include(x=>x.Type == "comment" || x.Type == "gift").Find(Query.All("ReceiveTime", Query.Descending)).Take(count);
+            }
 
-            foreach (var i in chats)
+            foreach (var i in chats!)
             {
                 if (i.SenderId != null)
                 {
@@ -77,6 +79,7 @@ internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
                         }
                         else
                         {
+                            log.Trace($"Collect user information with uid: {i.SenderId}");
                             this.Queue.Enqueue(
                                 new BilibiliUserCrawlerWorkItem(i.SenderId)
                             );
@@ -87,11 +90,5 @@ internal class BilibiliChatStorage : StorageBase, IBilibiliChatStorage
 
             return chats.Reverse().ToList();
         }, cancellationToken);
-    }
-
-    public void Dispose()
-    {
-        this.ChatDatabase.Dispose();
-        this.SampleDatabase.Dispose();
     }
 }

@@ -11,6 +11,8 @@ using LiveChatLib2.Services;
 using LiveChatLib2.Utils;
 using LiveChatLib2.Workers;
 using NLog;
+using YamlDotNet.Core;
+using IParser = LiveChatLib2.Parsers.IParser;
 
 namespace LiveChatLib2;
 public class LiveChatService
@@ -20,25 +22,32 @@ public class LiveChatService
 
     public LiveChatService()
     {
-        this.Services = new ServicesLocator();
         LoggerConfig.InitLogger();
+        this.Services = new ServicesLocator();
     }
 
     public async Task Deploy(CancellationToken cancellationToken)
     {
-        var tasks = new List<Task>();
+        try
+        {
+            var tasks = new List<Task>();
 
-        // Initialize workers.
-        tasks.Add(this.StartProcQueue(cancellationToken));
+            // Initialize workers.
+            tasks.Add(this.StartProcQueue(cancellationToken));
 
-        // Initialize services.
-        tasks.Add(this.StartServices(cancellationToken));
+            // Initialize services.
+            tasks.Add(this.StartServices(cancellationToken));
 
-        // Initialize parsers.
-        tasks.Add(this.StartParsers(cancellationToken));
+            // Initialize parsers.
+            tasks.Add(this.StartParsers(cancellationToken));
 
-        await Task.WhenAll(tasks);
-        Console.WriteLine("Service terminated.");
+            await Task.WhenAll(tasks);
+            log.Info("Service terminated.");
+        }
+        catch (Exception ex)
+        {
+            log.Fatal($"Service terminated with failed: {ex.Message}\n{ex.StackTrace}");
+        }
     }
 
     private async Task StartProcQueue(CancellationToken cancellationToken)
@@ -53,7 +62,13 @@ public class LiveChatService
 
     private async Task StartServices(CancellationToken cancellationToken)
     {
-        var distributeService = this.Services.ResolveRequired<DistributeService>();
+        var distributeService = this.Services.Resolve<DistributeService>();
+        if (distributeService is null)
+        {
+            log.Fatal("Failed to resolve distribute service, the service could not be started.");
+            return;
+        }
+
         await distributeService.Serve(cancellationToken);
     }
 
@@ -71,20 +86,46 @@ public class LiveChatService
     private async Task LoopProcessingQueue<T>(CancellationToken cancellationToken)
     {
         log.Trace($"Start processing worker item queue: {typeof(T).Name}.");
-        var worker = this.Services.ResolveRequired<IWorker<T>>();
-        var queue = this.Services.ResolveRequired<IMessageQueue<T>>();
+
+        if (this.Services is null)
+        {
+            log.Fatal("ServiceLocator has not been initialized.");
+            return;
+        }
+
+        var worker = this.Services.Resolve<IWorker<T>>();
+        var queue = this.Services.Resolve<IMessageQueue<T>>();
+
+        if (worker is null)
+        {
+            log.Fatal($"Failed to resolve {typeof(IWorker<T>).Name}.");
+            return;
+        }
+
+        if (queue is null)
+        {
+            log.Fatal($"Failed to resolve {typeof(IMessageQueue<T>).Name}.");
+            return;
+        }
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var message = queue.Dequeue();
-
-            if (message == null)
+            try
             {
-                await Task.Delay(250, cancellationToken);
-                continue;
-            }
+                var message = queue.Dequeue();
 
-            await worker.DoWork(message, cancellationToken);
+                if (message == null)
+                {
+                    await Task.Delay(250, cancellationToken);
+                    continue;
+                }
+
+                await worker.DoWork(message, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                log.Error($"Failed to process {typeof(T).Name} message: {ex.Message}\n{ex.StackTrace}");
+            }
         }
     }
 
@@ -92,21 +133,23 @@ public class LiveChatService
     {
         log.Trace($"StartSingleParser for {typeof(T).Name} has been called.");
 
-        if (this.Services == null)
-        {
-            throw new Exception("ServiceLocator has not been initialized.");
-        }
-
-        var parser = this.Services.ResolveRequired<T>();
         try
         {
+            var parser = this.Services.Resolve<T>();
+
+            if (parser is null)
+            {
+                log.Fatal($"Could not resolve {typeof(T).Name}.");
+                return;
+            }
+
             await parser.Start(cancellationToken);
             log.Info($"Parser: {typeof(T).Name} started.");
         }
         catch (Exception ex)
         {
             log.Fatal($"Parser running failed: {ex.Message}\n=====\n{ex.StackTrace}\n=====");
-            parser.Dispose();
+
             throw;
         }
     }

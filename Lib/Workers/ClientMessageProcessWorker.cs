@@ -17,19 +17,19 @@ namespace LiveChatLib2.Workers;
 internal class ClientMessageProcessWorker : IWorker<ClientMessage>
 {
     public ClientMessageProcessWorker(
-        WebSocketServer server,
-        IMessageQueue<WorkItemBase> parserQueue,
+        IMessageQueue<SendWorkItem> sendQueue,
+        IMessageQueue<CrawlerWorkItem> crawlerQueue,
         IBilibiliUserInfoStorage bilibiliUserInfoStorage
     )
     {
-        this.Server = server;
-        this.ParserQueue = parserQueue;
+        this.SendQueue = sendQueue;
+        this.CrawlerQueue = crawlerQueue;
         this.BilibiliUserInfoStorage = bilibiliUserInfoStorage;
     }
 
-    private WebSocketServer Server { get; }
-    private IMessageQueue<WorkItemBase> ParserQueue { get; }
-    public IBilibiliUserInfoStorage BilibiliUserInfoStorage { get; }
+    private IMessageQueue<SendWorkItem> SendQueue { get; }
+    private IMessageQueue<CrawlerWorkItem> CrawlerQueue { get; }
+    private IBilibiliUserInfoStorage BilibiliUserInfoStorage { get; }
 
     private readonly ILogger log = LogManager.GetCurrentClassLogger();
 
@@ -64,7 +64,7 @@ internal class ClientMessageProcessWorker : IWorker<ClientMessage>
                 ArgumentNullException.ThrowIfNull(userId, "id");
                 ArgumentNullException.ThrowIfNull(message.ClientInfo, "clientInfo");
                 this.BilibiliQueryUser(
-                    message.ClientInfo with { Action = ClientAction.Send }, 
+                    message.ClientInfo with { Action = ClientAction.Send },
                     userId
                 );
                 break;
@@ -73,12 +73,16 @@ internal class ClientMessageProcessWorker : IWorker<ClientMessage>
 
     private void BilibiliQueryUser(ClientInfo client, string userId)
     {
+        if (string.IsNullOrEmpty(userId))
+        {
+            log.Error("BilibiliQueryUser: userId is empty.");
+        }
         const string SOURCE = "bilibili";
         // Try to pick user first.
         var user = this.BilibiliUserInfoStorage.PickUserInformation(userId);
         if (user != null)
         {
-            this.ParserQueue.Enqueue(
+            this.SendQueue.Enqueue(
                 new SendWorkItem(
                     SOURCE,
                     client,
@@ -93,7 +97,8 @@ internal class ClientMessageProcessWorker : IWorker<ClientMessage>
         }
         else
         {
-            this.ParserQueue.Enqueue(
+            log.Debug($"Collect user information with uid: {userId}");
+            this.CrawlerQueue.Enqueue(
                 new BilibiliUserCrawlerWorkItem(
                     userId,
                     client

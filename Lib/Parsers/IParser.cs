@@ -1,6 +1,6 @@
 ﻿namespace LiveChatLib2.Parsers;
 
-public interface IParser : IDisposable
+public interface IParser
 {
     Task Start(CancellationToken cancellationToken);
 }

@@ -7,6 +7,7 @@ using LiveChatLib2.Services;
 using LiveChatLib2.Models;
 using LiveChatLib2.Models.QueueMessages.WorkItems;
 using Newtonsoft.Json;
+using YamlDotNet.Core.Tokens;
 
 namespace LiveChatLib2.Parsers;
 
@@ -21,8 +22,11 @@ internal partial class BilibiliParser
 
     private string? realRoomId;
     private string? roomToken;
-    private bool waitBack = false;
     private CancellationToken? proxyCancellationToken;
+
+    protected DateTime lastSendHeartBeatTime;
+    protected DateTime lastReceiveTime;
+    private bool waitBack = false;
 
     protected async Task StartProxy(CancellationToken ct)
     {
@@ -64,16 +68,16 @@ internal partial class BilibiliParser
                 {
                     await SendHeartBeat(this.Proxy, ct);
                     lastSendHeartBeatTime = now;
+                    log.Debug($"Heartbeat sent. Time:{now}, duration:{heartBeatDuration} ms");
                     waitBack = true;
-                    log.Trace("Heartbeat sent.");
-                    break;
                 }
 
                 // checking.
+                heartBeatDuration = (now - lastSendHeartBeatTime).TotalMilliseconds;
                 if (waitBack && heartBeatDuration > this.Config.LostTimeoutThreshold)
                 {
                     this.State = ParserListeningStatus.BadCommunication;
-                    log.Trace("Bad communication detected.");
+                    log.Warn("Bad communication detected, Try to reconnecting.");
                     _ = this.Proxy.ReconnectAsync(ct);
                 }
             }
@@ -84,6 +88,7 @@ internal partial class BilibiliParser
 
     private void Login()
     {
+        waitBack = false;
         log.Trace($"Try to login to the room.");
         if (proxyCancellationToken == null)
         {
@@ -97,12 +102,8 @@ internal partial class BilibiliParser
             throw new DataFormatException("BilibiliParser.WebSocketProxy not initialized.");
         }
 
-        var package = MakeAuthPackage("0", realRoomId, roomToken);
-        log.Debug($"Auth Package: {JsonConvert.SerializeObject(package)}");
+        SendAuthPackage(this.Proxy, "0", realRoomId, roomToken, default).Wait();
         log.Info($"Connecting WebSocket with ROOMID: {realRoomId} ...");
-        var bytes = package.ToByteArray();
-        //Task.Delay(1000).Wait();
-        this.Proxy.SendAsync(bytes, ct).Wait();
         log.Trace($"Login successfully.");
         this.State = ParserListeningStatus.Connected;
     }
@@ -159,11 +160,15 @@ internal partial class BilibiliParser
 
     private void OnMessage(object? sender, MessageEventArgs args)
     {
-        log.Trace("OnMessage verbose.");
         waitBack = false;
         lastReceiveTime = DateTime.UtcNow;
+
         try
         {
+            //var details = args.RawData.DisplayBytes();
+            var details = string.Empty;
+            log.Debug($"OnMessage verbose.\n{details}");
+
             foreach (var package in this.ParsePackagesFromBinary(args.RawData))
             {
                 try
@@ -188,6 +193,7 @@ internal partial class BilibiliParser
                     else
                     {
                         // collect user information.
+                        log.Trace($"Collect user information with uid: {msg.SenderId}");
                         if (msg.SenderId != null)
                         {
                             var user = this.UserStorage.PickUserInformation(msg.SenderId);
@@ -219,6 +225,16 @@ internal partial class BilibiliParser
                                 msg
                             )
                         );
+
+                        this.SendQueue.Enqueue(
+                            new SendWorkItem(
+                                "bilibili",
+                                new ClientInfo(ClientAction.Broadcast, "/app"),
+                                ObjectSerializer.ToJsonBinary(
+                                    new ClientMessageResponse("msg", msg)
+                                )
+                            )
+                        );
                     }
                 }
                 catch (Exception ex)
@@ -229,7 +245,7 @@ internal partial class BilibiliParser
         }
         catch (Exception ex)
         {
-            log.Error($"{ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+            log.Error($"OnMessage Failed to process({ex.GetType().Name}): {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -239,6 +255,7 @@ internal partial class BilibiliParser
             @$"{ROOM_INIT_URL}?id={roomId}",
             null,
             cancellationToken);
+        log.Debug($"GetRealRoomId response:\n{txt}");
         var jobj = JToken.Parse(txt);
         var id = jobj["data"]?["room_id"]?.ToString();
         return id;
@@ -250,6 +267,7 @@ internal partial class BilibiliParser
             @$"{GET_CONF_URL}?room_id={roomId}",
             null,
             cancellationToken);
+        log.Debug($"GetRealRoomId response:\n{txt}");
         var jobj = JToken.Parse(txt);
         var token = jobj["data"]?["token"]?.ToString();
         return token;
